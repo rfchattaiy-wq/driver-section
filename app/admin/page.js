@@ -3,22 +3,51 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 
 export default function AdminDashboard() {
-  const [authorized, setAuthorized] = useState(false);
-  const [pin, setPin] = useState('');
+  const [session, setSession] = useState(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // അഡ്മിൻ പിൻ നമ്പർ
-  const ADMIN_PIN = '1234';
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchBookings();
+    });
 
-  const checkPin = (e) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) fetchBookings();
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (pin === ADMIN_PIN) {
-      setAuthorized(true);
-      fetchBookings();
-    } else {
-      alert('Invalid PIN!');
+    setAuthLoading(true);
+    setAuthError('');
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      setAuthError(error.message);
     }
+    setAuthLoading(false);
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    setBookings([]);
   };
 
   const fetchBookings = async () => {
@@ -43,26 +72,37 @@ export default function AdminDashboard() {
       .eq('id', id);
 
     if (error) {
-      alert('Failed to update status');
+      alert('Failed to update status: ' + error.message);
     } else {
       setBookings(bookings.map((b) => (b.id === id ? { ...b, status: newStatus } : b)));
     }
   };
 
-  if (!authorized) {
+  if (!session) {
     return (
       <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#0D1A28', fontFamily: 'sans-serif', color: '#fff', padding: '20px' }}>
-        <form onSubmit={checkPin} style={{ background: '#14263A', padding: '30px', borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: '15px', width: '100%', maxWidth: '320px', border: '1px solid #24405A' }}>
-          <h2 style={{ margin: 0, textAlign: 'center', color: '#4C9BE0' }}>Admin Login</h2>
+        <form onSubmit={handleLogin} style={{ background: '#14263A', padding: '30px', borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: '15px', width: '100%', maxWidth: '340px', border: '1px solid #24405A' }}>
+          <h2 style={{ margin: 0, textAlign: 'center', color: '#4C9BE0' }}>Secure Admin Access</h2>
+          {authError && <div style={{ color: '#ef4444', fontSize: '0.9rem', background: '#451a1a', padding: '8px', borderRadius: '6px' }}>{authError}</div>}
+          
           <input
-            type="password"
-            placeholder="Enter PIN (Default: 1234)"
-            value={pin}
-            onChange={(e) => setPin(e.target.value)}
+            type="email"
+            placeholder="Admin Email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             style={{ padding: '12px', borderRadius: '8px', border: '1px solid #24405A', background: '#0D1A28', color: '#fff', fontSize: '1rem', outline: 'none' }}
           />
-          <button type="submit" style={{ padding: '12px', background: '#1769B5', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>
-            Unlock Dashboard
+          <input
+            type="password"
+            placeholder="Password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={{ padding: '12px', borderRadius: '8px', border: '1px solid #24405A', background: '#0D1A28', color: '#fff', fontSize: '1rem', outline: 'none' }}
+          />
+          <button type="submit" disabled={authLoading} style={{ padding: '12px', background: '#1769B5', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>
+            {authLoading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
       </div>
@@ -75,11 +115,16 @@ export default function AdminDashboard() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
           <div>
             <h1 style={{ margin: 0, fontSize: '1.8rem', color: '#1769B5' }}>Easy Drive Admin</h1>
-            <p style={{ margin: '4px 0 0', color: '#51647A' }}>Manage customer ride requests</p>
+            <p style={{ margin: '4px 0 0', color: '#51647A' }}>Logged in as: {session.user.email}</p>
           </div>
-          <button onClick={fetchBookings} style={{ padding: '10px 18px', background: '#3EC59B', color: '#0b2a21', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
-            {loading ? 'Refreshing...' : 'Refresh Bookings'}
-          </button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button onClick={fetchBookings} style={{ padding: '10px 16px', background: '#3EC59B', color: '#0b2a21', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
+            <button onClick={handleLogout} style={{ padding: '10px 16px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
+              Logout
+            </button>
+          </div>
         </div>
 
         {bookings.length === 0 ? (
