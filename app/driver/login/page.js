@@ -1,6 +1,7 @@
 'use client';
 import { supabase } from '@/lib/supabaseClient';
 
+
 export default function DriverLoginPage() {
   const handleGoogleLogin = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
