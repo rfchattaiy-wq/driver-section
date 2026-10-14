@@ -1,238 +1,214 @@
 'use client';
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabaseClient';
 
 export default function DriverDashboard() {
-  const [rides, setRides] = useState([]);
+  const router = useRouter();
   const [driverUser, setDriverUser] = useState(null);
   const [isOnline, setIsOnline] = useState(false);
+  const [availableRides, setAvailableRides] = useState([]);
+  const [currentActiveRide, setCurrentActiveRide] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // 1. ലോഗിൻ ചെയ്ത ഡ്രൈവറെയും നിലവിലെ റൈഡുകളെയും കണ്ടെത്തുന്നു
   useEffect(() => {
-    async function initDashboard() {
+    async function verifyDriverAndLoadData() {
       setLoading(true);
+
+      // 1. ലോഗിൻ ചെക്കിംഗ്
       const { data: { user } } = await supabase.auth.getUser();
-      setDriverUser(user);
-
-      if (user) {
-        // ഡ്രൈവറുടെ ഓൺലൈൻ സ്റ്റാറ്റസ് എടുക്കുന്നു
-        const { data: profile } = await supabase
-          .from('driver_profiles')
-          .select('is_online')
-          .eq('id', user.id)
-          .single();
-
-        if (profile) setIsOnline(profile.is_online || false);
+      if (!user) {
+        alert('ഈ പേജിൽ കയറാൻ ആദ്യം ലോഗിൻ ചെയ്യണം!');
+        router.push('/driver/login');
+        return;
       }
 
-      await fetchRides();
+      // 2. അപ്രൂവ് ചെയ്ത ഡ്രൈവർ ആണോ എന്ന് ഡാറ്റാബേസിൽ നോക്കുന്നു (Security Check)
+      const { data: profile, error: profileErr } = await supabase
+        .from('driver_profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (profileErr || !profile || profile.status !== 'approved') {
+        alert('നിങ്ങൾക്ക് ഇതിലേക്ക് അനുമതിയില്ല! അഡ്മിൻ അപ്രൂവലിനായി കാത്തിരിക്കുക.');
+        router.push('/driver/onboarding');
+        return;
+      }
+
+      setDriverUser(user);
+      setIsOnline(profile.is_online || false);
+
+      await loadRides(user.id);
       setLoading(false);
     }
 
-    initDashboard();
-  }, []);
+    verifyDriverAndLoadData();
+  }, [router]);
 
-  // ഡാറ്റാബേസിൽ നിന്ന് റൈഡുകൾ എടുക്കുന്നു
-  const fetchRides = async () => {
-    const { data, error } = await supabase
+  const loadRides = async (driverId) => {
+    // ഡ്രൈവർക്ക് നിലവിൽ അക്സെപ്റ്റ് ചെയ്ത ട്രിപ്പ് ഉണ്ടോ എന്ന് നോക്കുന്നു
+    const { data: myRide } = await supabase
       .from('rides')
       .select('*')
+      .eq('driver_id', driverId)
+      .eq('status', 'accepted')
+      .maybeSingle();
+
+    setCurrentActiveRide(myRide || null);
+
+    // ആരും എടുക്കാത്ത പുതിയ ട്രിപ്പുകൾ മാത്രം ലിസ്റ്റ് ചെയ്യുന്നു (status = requested)
+    const { data: openRides } = await supabase
+      .from('rides')
+      .select('*')
+      .eq('status', 'requested')
       .order('created_at', { ascending: false });
 
-    if (!error && data) {
-      setRides(data);
-    }
+    setAvailableRides(openRides || []);
   };
 
-  // 2. ഓൺലൈൻ / ഓഫ്ലൈൻ സ്റ്റാറ്റസ് മാറ്റുന്നു
-  const toggleOnlineStatus = async () => {
+  // ഓൺലൈൻ / ഓഫ്ലൈൻ മാറ്റുന്നു
+  const toggleOnline = async () => {
     if (!driverUser) return;
     const newStatus = !isOnline;
     setIsOnline(newStatus);
-
-    await supabase
-      .from('driver_profiles')
-      .update({ is_online: newStatus })
-      .eq('id', driverUser.id);
+    await supabase.from('driver_profiles').update({ is_online: newStatus }).eq('id', driverUser.id);
   };
 
-  // 3. റൈഡ് സ്വീകരിക്കുന്നു (Accept Ride)
+  // ട്രിപ്പ് അക്സെപ്റ്റ് ചെയ്യുന്നു (Concurrency Lock സഹിതം)
   const handleAcceptRide = async (rideId) => {
-    if (!driverUser) {
-      alert('ദയവായി ആദ്യം ലോഗിൻ ചെയ്യുക.');
+    if (currentActiveRide) {
+      alert('നിങ്ങൾ ഇപ്പോൾ മറ്റൊരു യാത്രയിലാണ്! അത് തീർത്ത ശേഷം മാത്രമേ അടുത്തത് എടുക്കാൻ സാധിക്കൂ.');
       return;
     }
 
+    // ഈ ട്രിപ്പ് ഇപ്പോഴും requested ആണെങ്കിൽ മാത്രമേ അക്സെപ്റ്റ് ആവൂ
     const { error } = await supabase
       .from('rides')
-      .update({
-        driver_id: driverUser.id,
-        status: 'accepted'
-      })
-      .eq('id', rideId);
+      .update({ driver_id: driverUser.id, status: 'accepted' })
+      .eq('id', rideId)
+      .eq('status', 'requested');
 
     if (error) {
-      alert('റൈഡ് സ്വീകരിക്കുന്നതിൽ തടസ്സം: ' + error.message);
+      alert('ഈ ട്രിപ്പ് മറ്റാരോ എടുത്തു കഴിഞ്ഞു അല്ലെങ്കിൽ തടസ്സം നേരിട്ടു!');
     } else {
-      alert('നിങ്ങൾ ഈ ട്രിപ്പ് വിജയകരമായി സ്വീകരിച്ചു!');
-      fetchRides();
+      alert('യാത്ര വിജയകരമായി ഏറ്റെടുത്തു!');
     }
+    loadRides(driverUser.id);
   };
 
-  // 4. ട്രിപ്പ് പൂർത്തിയാക്കുന്നു (Complete Ride)
+  // ട്രിപ്പ് പൂർത്തിയാക്കുന്നു
   const handleCompleteRide = async (rideId) => {
     const { error } = await supabase
       .from('rides')
       .update({ status: 'completed' })
       .eq('id', rideId);
 
-    if (error) {
-      alert('Error: ' + error.message);
-    } else {
-      alert('ട്രിപ്പ് വിജയകരമായി പൂർത്തിയായി.');
-      fetchRides();
+    if (!error) {
+      alert('യാത്ര വിജയകരമായി പൂർത്തിയായി.');
+      setCurrentActiveRide(null);
+      loadRides(driverUser.id);
     }
   };
+
+  if (loading) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#0D1A28', color: '#EAF3F4', display: 'grid', placeItems: 'center', fontFamily: 'sans-serif' }}>
+        <p>അനുമതി പരിശോധിക്കുന്നു...</p>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: '100vh', background: '#0D1A28', color: '#EAF3F4', fontFamily: 'sans-serif', padding: '24px 16px' }}>
       <div style={{ maxWidth: '850px', margin: '0 auto' }}>
-        
-        {/* Header Bar */}
+
+        {/* ഹെഡർ */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#14263A', padding: '20px', borderRadius: '16px', border: '1px solid #24405A', flexWrap: 'wrap', gap: '14px' }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: '1.5rem', color: '#3EC59B' }}>ഡ്രൈവർ പാർട്ണർ ഡാഷ്‌ബോർഡ്</h1>
-            <p style={{ margin: '4px 0 0', color: '#A5B8C8', fontSize: '0.85rem' }}>
-              {driverUser ? driverUser.email : 'ലോഗിൻ ചെയ്തിട്ടില്ല'}
-            </p>
+            <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#3EC59B' }}>ഡ്രൈവർ പാർട്ണർ ഡാഷ്‌ബോർഡ്</h1>
+            <p style={{ margin: '4px 0 0', color: '#A5B8C8', fontSize: '0.85rem' }}>വെരിഫൈ ചെയ്ത ഡ്രൈവർ: {driverUser.email}</p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <button
-              onClick={toggleOnlineStatus}
-              style={{
-                padding: '10px 20px',
-                borderRadius: '999px',
-                border: 'none',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                background: isOnline ? '#1F9E78' : '#dc2626',
-                color: '#fff',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}
-            >
-              <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#fff' }}></span>
-              {isOnline ? 'Online (ട്രിപ്പുകൾ എടുക്കാം)' : 'Offline (വിശ്രമത്തിലാണ്)'}
-            </button>
-            <button onClick={fetchRides} style={{ padding: '10px 14px', background: '#24405A', border: 'none', borderRadius: '8px', color: '#fff', cursor: 'pointer' }}>
-              🔄 Refresh
-            </button>
-          </div>
+          <button
+            onClick={toggleOnline}
+            style={{
+              padding: '10px 20px',
+              borderRadius: '999px',
+              border: 'none',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              background: isOnline ? '#1F9E78' : '#dc2626',
+              color: '#fff'
+            }}
+          >
+            {isOnline ? '🟢 Online' : '🔴 Offline'}
+          </button>
         </div>
 
-        {/* Trips List */}
-        <h2 style={{ marginTop: '32px', marginBottom: '16px', fontSize: '1.25rem', color: '#4C9BE0' }}>
-          വന്ന റൈഡ് റിക്വസ്റ്റുകൾ (Available Bookings)
-        </h2>
+        {/* 1. ഡ്രൈവറുടെ നിലവിലെ സജീവ യാത്ര (Active Trip) */}
+        {currentActiveRide && (
+          <div style={{ marginTop: '24px', background: '#08241c', border: '2px solid #3EC59B', borderRadius: '16px', padding: '20px' }}>
+            <span style={{ background: '#3EC59B', color: '#08241c', padding: '4px 8px', borderRadius: '4px', fontWeight: 'bold', fontSize: '0.8rem' }}>
+              നടന്നുകൊണ്ടിരിക്കുന്ന യാത്ര (ACTIVE)
+            </span>
+            <h2 style={{ color: '#fff', margin: '12px 0 6px' }}>യാത്രക്കാരൻ: {currentActiveRide.rider_name}</h2>
+            <p style={{ margin: '4px 0', color: '#bbf7d0' }}>📞 ഫോൺ: {currentActiveRide.rider_phone}</p>
+            <p style={{ margin: '4px 0', color: '#bbf7d0' }}>📍 പിക്കപ്പ്: {currentActiveRide.pickup_location}</p>
+            <p style={{ margin: '4px 0', color: '#bbf7d0' }}>🏁 ഡ്രോപ്പ്: {currentActiveRide.dropoff_location}</p>
 
-        {loading ? (
-          <p style={{ color: '#A5B8C8' }}>ലോഡ് ആകുന്നു...</p>
-        ) : rides.length === 0 ? (
-          <div style={{ background: '#14263A', padding: '32px', textAlign: 'center', borderRadius: '12px', border: '1px solid #24405A', color: '#A5B8C8' }}>
-            ഇപ്പോൾ പുതിയ ബുക്കിംഗുകൾ ലഭ്യമല്ല.
+            <button
+              onClick={() => handleCompleteRide(currentActiveRide.id)}
+              style={{ marginTop: '16px', padding: '12px 24px', background: '#38bdf8', color: '#0f172a', fontWeight: 'bold', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
+            >
+              യാത്ര പൂർത്തിയായി (Complete Ride)
+            </button>
+          </div>
+        )}
+
+        {/* 2. പുതിയ യാത്രകൾ (Available Rides) */}
+        <h2 style={{ marginTop: '32px', color: '#4C9BE0', fontSize: '1.2rem' }}>ലഭ്യമായ പുതിയ ബുക്കിംഗുകൾ</h2>
+
+        {currentActiveRide && (
+          <p style={{ color: '#f59e0b', fontSize: '0.9rem' }}>
+            ⚠️ നിങ്ങൾ ഇപ്പോൾ ഒരു യാത്രയിലാണ്. അത് പൂർത്തിയാക്കിയ ശേഷം മാത്രമേ അടുത്തത് എടുക്കാൻ സാധിക്കൂ.
+          </p>
+        )}
+
+        {availableRides.length === 0 ? (
+          <div style={{ background: '#14263A', padding: '28px', textAlign: 'center', borderRadius: '12px', color: '#A5B8C8' }}>
+            പുതിയ ബുക്കിംഗുകൾ ഒന്നും ലഭ്യമല്ല.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {rides.map((ride) => (
-              <div
-                key={ride.id}
-                style={{
-                  background: '#14263A',
-                  border: '1px solid #24405A',
-                  borderRadius: '14px',
-                  padding: '20px',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
-                  gap: '16px'
-                }}
-              >
+          <div style={{ display: 'grid', gap: '14px', marginTop: '12px' }}>
+            {availableRides.map(ride => (
+              <div key={ride.id} style={{ background: '#14263A', border: '1px solid #24405A', borderRadius: '12px', padding: '18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                 <div>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
-                    <span style={{
-                      fontSize: '0.75rem',
-                      fontWeight: 'bold',
-                      padding: '3px 8px',
-                      borderRadius: '4px',
-                      background: ride.status === 'accepted' ? '#1F9E78' : ride.status === 'completed' ? '#3b82f6' : '#d97706',
-                      color: '#fff'
-                    }}>
-                      {ride.status.toUpperCase()}
-                    </span>
-                    <span style={{ color: '#A5B8C8', fontSize: '0.85rem' }}>{ride.trip_type || 'യാത്ര'}</span>
-                  </div>
-
-                  <h3 style={{ margin: '0 0 6px', fontSize: '1.15rem', color: '#fff' }}>
-                    യാത്രക്കാരൻ: {ride.rider_name || 'പേര് നൽകിയിട്ടില്ല'}
-                  </h3>
-                  <p style={{ margin: '2px 0', fontSize: '0.9rem', color: '#A5B8C8' }}>
-                    📞 ഫോൺ: <strong style={{ color: '#fff' }}>{ride.rider_phone || 'ലഭ്യമല്ല'}</strong>
-                  </p>
-                  <p style={{ margin: '2px 0', fontSize: '0.9rem', color: '#A5B8C8' }}>
-                    📍 പിക്കപ്പ് സ്ഥലം: <strong style={{ color: '#fff' }}>{ride.pickup_location}</strong>
-                  </p>
-                  {ride.dropoff_location && (
-                    <p style={{ margin: '2px 0', fontSize: '0.9rem', color: '#A5B8C8' }}>
-                      🏁 ഡ്രോപ്പ് സ്ഥലം: {ride.dropoff_location}
-                    </p>
-                  )}
+                  <h4 style={{ margin: '0 0 4px', color: '#fff' }}>{ride.trip_type}</h4>
+                  <p style={{ margin: '2px 0', color: '#A5B8C8' }}>യാത്രക്കാരൻ: {ride.rider_name} ({ride.rider_phone})</p>
+                  <p style={{ margin: '2px 0', color: '#A5B8C8' }}>പിക്കപ്പ്: {ride.pickup_location}</p>
                 </div>
 
-                {/* Actions */}
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {ride.status === 'requested' && (
-                    <button
-                      onClick={() => handleAcceptRide(ride.id)}
-                      disabled={!isOnline}
-                      style={{
-                        padding: '12px 22px',
-                        background: isOnline ? '#3EC59B' : '#475569',
-                        color: isOnline ? '#08241c' : '#94a3b8',
-                        fontWeight: 'bold',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: isOnline ? 'pointer' : 'not-allowed'
-                      }}
-                    >
-                      {isOnline ? 'Accept Ride' : 'Online ആകുക'}
-                    </button>
-                  )}
-
-                  {ride.status === 'accepted' && ride.driver_id === driverUser?.id && (
-                    <button
-                      onClick={() => handleCompleteRide(ride.id)}
-                      style={{
-                        padding: '10px 18px',
-                        background: '#3b82f6',
-                        color: '#fff',
-                        fontWeight: 'bold',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Mark Completed
-                    </button>
-                  )}
-                </div>
+                <button
+                  onClick={() => handleAcceptRide(ride.id)}
+                  disabled={!isOnline || !!currentActiveRide}
+                  style={{
+                    padding: '10px 20px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    fontWeight: 'bold',
+                    cursor: (isOnline && !currentActiveRide) ? 'pointer' : 'not-allowed',
+                    background: (isOnline && !currentActiveRide) ? '#3EC59B' : '#475569',
+                    color: (isOnline && !currentActiveRide) ? '#08241c' : '#94a3b8'
+                  }}
+                >
+                  Accept Ride
+                </button>
               </div>
             ))}
           </div>
         )}
+
       </div>
     </div>
   );
