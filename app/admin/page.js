@@ -2,107 +2,61 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 
-export default function AdminDashboard() {
-  const [session, setSession] = useState(null);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState('');
+export default function AdminControlHub() {
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
+  const [adminPass, setAdminPass] = useState('');
+  const [rides, setRides] = useState([]);
+  const [drivers, setDrivers] = useState([]);
 
-  const [bookings, setBookings] = useState([]);
-  const [loading, setLoading] = useState(false);
+  // ലളിതമായ അഡ്മിൻ സെക്യൂരിറ്റി പാസ്‌വേഡ് (നിങ്ങൾക്ക് മാറ്റാം)
+  const ADMIN_SECRET = 'admin123';
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) fetchBookings();
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) fetchBookings();
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setAuthLoading(true);
-    setAuthError('');
-
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      setAuthError(error.message);
-    }
-    setAuthLoading(false);
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setSession(null);
-    setBookings([]);
-  };
-
-  const fetchBookings = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('bookings')
+  const loadData = async () => {
+    // 1. എല്ലാ റൈഡുകളും എടുക്കുന്നു
+    const { data: rideData } = await supabase
+      .from('rides')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (error) {
-      alert('Error fetching bookings: ' + error.message);
-    } else {
-      setBookings(data || []);
-    }
-    setLoading(false);
+    // 2. എല്ലാ ഡ്രൈവർമാരെയും എടുക്കുന്നു
+    const { data: driverData } = await supabase
+      .from('driver_profiles')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    setRides(rideData || []);
+    setDrivers(driverData || []);
   };
 
-  const updateStatus = async (id, newStatus) => {
-    const { error } = await supabase
-      .from('bookings')
-      .update({ status: newStatus })
-      .eq('id', id);
-
-    if (error) {
-      alert('Failed to update status: ' + error.message);
+  const handleAdminLogin = (e) => {
+    e.preventDefault();
+    if (adminPass === ADMIN_SECRET) {
+      setIsAdminAuthenticated(true);
+      loadData();
     } else {
-      setBookings(bookings.map((b) => (b.id === id ? { ...b, status: newStatus } : b)));
+      alert('തെറ്റായ അഡ്മിൻ പാസ്‌വേഡ്!');
     }
   };
 
-  if (!session) {
+  const updateDriverStatus = async (driverId, newStatus) => {
+    await supabase.from('driver_profiles').update({ status: newStatus }).eq('id', driverId);
+    loadData();
+  };
+
+  if (!isAdminAuthenticated) {
     return (
-      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#0D1A28', fontFamily: 'sans-serif', color: '#fff', padding: '20px' }}>
-        <form onSubmit={handleLogin} style={{ background: '#14263A', padding: '30px', borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: '15px', width: '100%', maxWidth: '340px', border: '1px solid #24405A' }}>
-          <h2 style={{ margin: 0, textAlign: 'center', color: '#4C9BE0' }}>Secure Admin Access</h2>
-          {authError && <div style={{ color: '#ef4444', fontSize: '0.9rem', background: '#451a1a', padding: '8px', borderRadius: '6px' }}>{authError}</div>}
-          
-          <input
-            type="email"
-            placeholder="Admin Email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            style={{ padding: '12px', borderRadius: '8px', border: '1px solid #24405A', background: '#0D1A28', color: '#fff', fontSize: '1rem', outline: 'none' }}
-          />
+      <div style={{ minHeight: '100vh', background: '#0D1A28', color: '#fff', display: 'flex', justifyContent: 'center', alignItems: 'center', fontFamily: 'sans-serif' }}>
+        <form onSubmit={handleAdminLogin} style={{ background: '#14263A', padding: '32px', borderRadius: '16px', border: '1px solid #24405A', width: '320px', textAlign: 'center' }}>
+          <h2 style={{ color: '#4C9BE0', marginTop: 0 }}>അഡ്മിൻ ലോഗിൻ</h2>
           <input
             type="password"
-            placeholder="Password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={{ padding: '12px', borderRadius: '8px', border: '1px solid #24405A', background: '#0D1A28', color: '#fff', fontSize: '1rem', outline: 'none' }}
+            placeholder="അഡ്മിൻ പാസ്‌വേഡ്"
+            value={adminPass}
+            onChange={(e) => setAdminPass(e.target.value)}
+            style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #24405A', background: '#0D1A28', color: '#fff', marginBottom: '16px', boxSizing: 'border-box' }}
           />
-          <button type="submit" disabled={authLoading} style={{ padding: '12px', background: '#1769B5', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>
-            {authLoading ? 'Signing in...' : 'Sign In'}
+          <button type="submit" style={{ width: '100%', padding: '10px', background: '#4C9BE0', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>
+            തുറക്കുക
           </button>
         </form>
       </div>
@@ -110,71 +64,60 @@ export default function AdminDashboard() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: '#F7FAF9', fontFamily: 'sans-serif', padding: '30px 20px', color: '#16283A' }}>
-      <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: '1.8rem', color: '#1769B5' }}>Easy Drive Admin</h1>
-            <p style={{ margin: '4px 0 0', color: '#51647A' }}>Logged in as: {session.user.email}</p>
-          </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={fetchBookings} style={{ padding: '10px 16px', background: '#3EC59B', color: '#0b2a21', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
-              {loading ? 'Refreshing...' : 'Refresh'}
-            </button>
-            <button onClick={handleLogout} style={{ padding: '10px 16px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
-              Logout
-            </button>
-          </div>
+    <div style={{ minHeight: '100vh', background: '#0D1A28', color: '#EAF3F4', fontFamily: 'sans-serif', padding: '24px 20px' }}>
+      <div style={{ maxWidth: '1050px', margin: '0 auto' }}>
+        
+        <h1 style={{ color: '#4C9BE0', margin: 0 }}>Easy Drive Admin Operations Hub</h1>
+        <p style={{ color: '#A5B8C8' }}>ട്രിപ്പ് നിരീക്ഷണവും ഡ്രൈവർ അപ്രൂവലും</p>
+
+        {/* ഭാഗം 1: ട്രിപ്പുകളുടെ സ്റ്റാറ്റസ് (ആര് എടുത്തു എന്ന് കാണാം) */}
+        <h2 style={{ marginTop: '28px', color: '#3EC59B' }}>എല്ലാ ട്രിപ്പുകളും & ഡ്രൈവർ സ്റ്റാറ്റസും</h2>
+        <div style={{ display: 'grid', gap: '12px' }}>
+          {rides.map(ride => {
+            const assignedDriver = drivers.find(d => d.id === ride.driver_id);
+            return (
+              <div key={ride.id} style={{ background: '#14263A', border: '1px solid #24405A', borderRadius: '12px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <h4 style={{ margin: '0 0 4px', color: '#fff' }}>യാത്രക്കാരൻ: {ride.rider_name} ({ride.rider_phone})</h4>
+                  <p style={{ margin: '2px 0', fontSize: '0.85rem', color: '#A5B8C8' }}>പിക്കപ്പ്: {ride.pickup_location}</p>
+                  <p style={{ margin: '2px 0', fontSize: '0.85rem', color: '#3EC59B' }}>
+                    🚕 നിയോഗിക്കപ്പെട്ട ഡ്രൈവർ: <strong>{assignedDriver ? `${assignedDriver.full_name} (${assignedDriver.phone})` : 'ആരും എടുത്തിട്ടില്ല (Waiting)'}</strong>
+                  </p>
+                </div>
+                <span style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold', background: ride.status === 'completed' ? '#3b82f6' : ride.status === 'accepted' ? '#1F9E78' : '#eab308', color: '#fff' }}>
+                  {ride.status.toUpperCase()}
+                </span>
+              </div>
+            );
+          })}
         </div>
 
-        {bookings.length === 0 ? (
-          <div style={{ background: '#fff', padding: '40px', borderRadius: '16px', textAlign: 'center', border: '1px solid #DCE6E8' }}>
-            <p style={{ margin: 0, color: '#51647A' }}>No bookings found yet.</p>
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gap: '16px' }}>
-            {bookings.map((b) => (
-              <div key={b.id} style={{ background: '#fff', padding: '20px', borderRadius: '16px', border: '1px solid #DCE6E8', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '16px', alignItems: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                <div>
-                  <h3 style={{ margin: '0 0 6px', fontSize: '1.2rem', color: '#16283A' }}>{b.customer_name}</h3>
-                  <p style={{ margin: '0 0 4px', color: '#51647A', fontSize: '0.95rem' }}>📞 Phone: <strong>{b.customer_phone}</strong></p>
-                  <p style={{ margin: '0 0 4px', color: '#51647A', fontSize: '0.95rem' }}>📍 Pickup: <strong>{b.pickup_location}</strong></p>
-                  <p style={{ margin: '0 0 4px', color: '#51647A', fontSize: '0.95rem' }}>🕒 Time: <strong>{b.pickup_date || 'N/A'}</strong> ({b.transmission_type || 'Commute'})</p>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', minWidth: '160px' }}>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <a
-                      href={`tel:${b.customer_phone}`}
-                      style={{ flex: 1, textAlign: 'center', padding: '8px', background: '#1769B5', color: '#fff', textDecoration: 'none', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 'bold' }}
-                    >
-                      Call
-                    </a>
-                    <a
-                      href={`https://wa.me/${b.customer_phone?.replace(/[^0-9]/g, '')}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ flex: 1, textAlign: 'center', padding: '8px', background: '#25D366', color: '#fff', textDecoration: 'none', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 'bold' }}
-                    >
-                      WhatsApp
-                    </a>
-                  </div>
-
-                  <select
-                    value={b.status || 'Pending'}
-                    onChange={(e) => updateStatus(b.id, e.target.value)}
-                    style={{ padding: '8px', borderRadius: '6px', border: '1px solid #DCE6E8', background: b.status === 'Completed' ? '#dcfce7' : b.status === 'Confirmed' ? '#e0f2fe' : '#fef9c3', fontWeight: 'bold', cursor: 'pointer' }}
-                  >
-                    <option value="Pending">Pending</option>
-                    <option value="Confirmed">Confirmed</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Cancelled">Cancelled</option>
-                  </select>
-                </div>
+        {/* ഭാഗം 2: ഡ്രൈവർമാരെ വെരിഫൈ ചെയ്യാനുള്ള ലിസ്റ്റ് */}
+        <h2 style={{ marginTop: '40px', color: '#4C9BE0' }}>ഡ്രൈവർ ലൈസൻസ് അപ്രൂവൽ</h2>
+        <div style={{ display: 'grid', gap: '12px' }}>
+          {drivers.map(driver => (
+            <div key={driver.id} style={{ background: '#14263A', border: '1px solid #24405A', borderRadius: '12px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h4 style={{ margin: '0 0 4px', color: '#fff' }}>{driver.full_name} ({driver.phone})</h4>
+                <p style={{ margin: '2px 0', fontSize: '0.85rem', color: '#A5B8C8' }}>ലൈസൻസ്: {driver.license_number}</p>
+                {driver.license_url && (
+                  <a href={driver.license_url} target="_blank" rel="noreferrer" style={{ color: '#4C9BE0', fontSize: '0.85rem' }}>ലൈസൻസ് ഫോട്ടോ കാണുക &rarr;</a>
+                )}
               </div>
-            ))}
-          </div>
-        )}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <span style={{ padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', background: driver.status === 'approved' ? '#1F9E78' : '#dc2626', color: '#fff' }}>
+                  {driver.status.toUpperCase()}
+                </span>
+                {driver.status !== 'approved' && (
+                  <button onClick={() => updateDriverStatus(driver.id, 'approved')} style={{ padding: '6px 12px', background: '#3EC59B', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>
+                    അപ്രൂവ് ചെയ്യുക
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
       </div>
     </div>
   );
