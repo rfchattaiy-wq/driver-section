@@ -5,7 +5,6 @@ import { supabase } from '../../../lib/supabaseClient';
 
 export default function RiderLoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -22,23 +21,29 @@ export default function RiderLoginPage() {
     if (error) setMsg(error.message);
   };
 
-  // ഫോൺ & ഇമെയിൽ ലോഗിൻ / സിമ്പിൾ സൈൻ-ഇൻ
-  const handleEmailLogin = async (e) => {
+  // ഫോൺ നമ്പർ ലോഗിൻ
+  const handleLogin = (e) => {
     e.preventDefault();
+    setMsg('');
+
+    if (name.trim().length < 3) {
+      setMsg('കുറഞ്ഞത് 3 അക്ഷരങ്ങളുള്ള പേര് നൽകുക.');
+      return;
+    }
+
     if (!/^[6-9]\d{9}$/.test(phone.trim())) {
       setMsg('സാധുവായ 10 അക്ക മൊബൈൽ നമ്പർ നൽകുക.');
       return;
     }
 
     setLoading(true);
-    setMsg('');
 
-    // യൂസറുടെ വിവരങ്ങൾ ലോക്കൽ സെഷനിലേക്ക് സേവ് ചെയ്യുന്നു
+    // ലോക്കൽ സ്റ്റോറേജിലേക്ക് വിവരം ഉറപ്പിച്ചു സേവ് ചെയ്യുന്നു
     localStorage.setItem('easydrive_rider_name', name.trim());
     localStorage.setItem('easydrive_rider_phone', phone.trim());
 
-    // പാസ്‌വേഡ് ഇല്ലാതെ ഒറ്റ ക്ലിക്കിൽ ഡാഷ്‌ബോർഡിലേക്ക്
-    router.push('/rider/dashboard');
+    // ഡാഷ്‌ബോർഡിലേക്ക് റീഡയറക്റ്റ് ചെയ്യുന്നു (ലൂപ്പ് വരാതിരിക്കാൻ window.location ഉപയോഗിക്കുന്നു)
+    window.location.href = '/rider/dashboard';
   };
 
   return (
@@ -66,19 +71,19 @@ export default function RiderLoginPage() {
 
         <div style={{ textAlign: 'center', margin: '16px 0', color: '#94A3B8', fontSize: '0.85rem' }}>അല്ലെങ്കിൽ ഫോൺ നമ്പർ ഉപയോഗിച്ച്</div>
 
-        <form onSubmit={handleEmailLogin} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div>
             <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '4px' }}>പേര്</label>
-            <input required placeholder="Akash Prakash" value={name} onChange={e => setName(e.target.value)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #CBD5E1', boxSizing: 'border-box' }} />
+            <input required placeholder="നിങ്ങളുടെ പേര്" value={name} onChange={e => setName(e.target.value)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #CBD5E1', boxSizing: 'border-box' }} />
           </div>
 
           <div>
-            <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '4px' }}>മൊബൈൽ നമ്പർ (10 അക്കങ്ങൾ)</label>
+            <label style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '4px' }}>മൊബൈൽ നമ്പർ</label>
             <input required type="tel" maxLength={10} placeholder="9876543210" value={phone} onChange={e => setPhone(e.target.value)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #CBD5E1', boxSizing: 'border-box' }} />
           </div>
 
           <button type="submit" disabled={loading} style={{ padding: '13px', background: '#1467B8', color: '#fff', borderRadius: '10px', border: 'none', fontWeight: 800, cursor: 'pointer', marginTop: '6px' }}>
-            ഡാഷ്‌ബോർഡിലേക്ക് പ്രവേശിക്കുക
+            {loading ? 'പ്രവേശിക്കുന്നു...' : 'ഡാഷ്‌ബോർഡിലേക്ക് പ്രവേശിക്കുക'}
           </button>
         </form>
       </div>
