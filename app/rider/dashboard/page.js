@@ -1,268 +1,196 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabaseClient';
 
 export default function RiderDashboard() {
-  const [user, setUser] = useState(null);
+  const router = useRouter();
+  const [userName, setUserName] = useState('');
+  const [userPhone, setUserPhone] = useState('');
+  const [rides, setRides] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [statusMsg, setStatusMsg] = useState('');
+
+  // ബുക്കിംഗ് ഫോം വിവരങ്ങൾ
   const [pickup, setPickup] = useState('');
   const [dropoff, setDropoff] = useState('');
-  const [phone, setPhone] = useState('');
   const [tripType, setTripType] = useState('Daily commute');
-  const [activeRide, setActiveRide] = useState(null);
-  const [driverInfo, setDriverInfo] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [time, setTime] = useState('');
 
-  // നിലവിലെ റൈഡും ഡ്രൈവറുടെ വിവരങ്ങളും കണ്ടെത്തുന്നു
-  const fetchCurrentTrip = useCallback(async (userId) => {
-    if (!userId) return;
-
-    const { data: rides } = await supabase
-      .from('rides')
-      .select('*')
-      .eq('rider_id', userId)
-      .in('status', ['requested', 'accepted'])
-      .order('created_at', { ascending: false })
-      .limit(1);
-
-    if (rides && rides.length > 0) {
-      const currentTrip = rides[0];
-      setActiveRide(currentTrip);
-
-      // ഡ്രൈവർ അക്സെപ്റ്റ് ചെയ്തിട്ടുണ്ടെങ്കിൽ ഡ്രൈവറുടെ വിവരങ്ങൾ എടുക്കുന്നു
-      if (currentTrip.status === 'accepted' && currentTrip.driver_id) {
-        const { data: driver } = await supabase
-          .from('driver_profiles')
-          .select('full_name, phone, vehicle_details')
-          .eq('id', currentTrip.driver_id)
-          .single();
-
-        if (driver) setDriverInfo(driver);
-      } else {
-        setDriverInfo(null);
-      }
-    } else {
-      setActiveRide(null);
-      setDriverInfo(null);
-    }
+  const currentDateTime = useMemo(() => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    return now.toISOString().slice(0, 16);
   }, []);
 
   useEffect(() => {
-    async function initUser() {
-      const { data: { user } } = await supabase.auth.getUser();
-      setUser(user);
-      if (user) {
-        fetchCurrentTrip(user.id);
-      }
+    const n = localStorage.getItem('easydrive_rider_name') || 'Customer';
+    const p = localStorage.getItem('easydrive_rider_phone') || '';
+    if (!p) {
+      router.push('/rider/login');
+      return;
     }
-    initUser();
-  }, [fetchCurrentTrip]);
+    setUserName(n);
+    setUserPhone(p);
+    fetchMyRides(p);
+  }, [router]);
 
-  // തത്സമയ അപ്ഡേറ്റിനായി 4 സെക്കൻഡ് കൂടുമ്പോൾ ഡാറ്റ പരിശോധിക്കുന്നു (Polling)
-  useEffect(() => {
-    if (!user || !activeRide || activeRide.status === 'completed') return;
+  // ഈ യൂസറുടെ ബുക്കിംഗുകൾ മാത്രം കൊണ്ടുവരുന്നു
+  const fetchMyRides = async (phone) => {
+    const { data } = await supabase
+      .from('rides')
+      .select('*')
+      .eq('rider_phone', phone)
+      .order('created_at', { ascending: false });
 
-    const interval = setInterval(() => {
-      fetchCurrentTrip(user.id);
-    }, 4000);
-
-    return () => clearInterval(interval);
-  }, [user, activeRide, fetchCurrentTrip]);
-
-  const handleGoogleLogin = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: `${window.location.origin}/rider/dashboard` }
-    });
+    if (data) setRides(data);
   };
 
-  const handleRequestRide = async (e) => {
+  const handleBooking = async (e) => {
     e.preventDefault();
-    setErrorMsg('');
-
-    // വാലിഡേഷൻ
-    const phoneRegex = /^[6-9]\d{9}$/;
-    if (!phoneRegex.test(phone.trim())) {
-      setErrorMsg('സാധുവായ 10 അക്ക മൊബൈൽ നമ്പർ നൽകുക.');
-      return;
-    }
-
-    if (pickup.trim().length < 6 || dropoff.trim().length < 6) {
-      setErrorMsg('പിക്കപ്പ്, ഡ്രോപ്പ് സ്ഥലങ്ങൾ കൃത്യമായി വ്യക്തമാക്കുക (കുറഞ്ഞത് 6 അക്ഷരങ്ങൾ).');
-      return;
-    }
-
     setLoading(true);
+    setStatusMsg('');
 
     const { data, error } = await supabase.from('rides').insert({
-      rider_id: user ? user.id : null,
-      rider_name: user?.user_metadata?.full_name || 'Passenger',
-      rider_phone: phone.trim(),
-      pickup_location: pickup.trim(),
-      dropoff_location: dropoff.trim(),
+      rider_name: userName,
+      rider_phone: userPhone,
       trip_type: tripType,
-      status: 'requested'
-    }).select().single();
+      scheduled_time: time,
+      pickup_location: pickup,
+      dropoff_location: dropoff,
+      status: 'pending',
+    }).select();
 
     if (error) {
-      setErrorMsg('റൈഡ് ബുക്ക് ചെയ്യാൻ സാധിച്ചില്ല: ' + error.message);
+      setStatusMsg('ബുക്കിംഗ് പരാജയപ്പെട്ടു: ' + error.message);
     } else {
-      setActiveRide(data);
+      setStatusMsg('✅ റൈഡ് വിജയകരമായി ബുക്ക് ചെയ്തു! അഡ്മിന് തനിയെ വിവരം ലഭിക്കുന്നതാണ്.');
+      setPickup('');
+      setDropoff('');
+      fetchMyRides(userPhone);
+
+      // ഓട്ടോമാറ്റിക് ബാക്ക്‌എൻഡ് അഡ്മിൻ അലേർട്ട് ട്രിഗർ (WhatsApp Webhook / Notification)
+      try {
+        fetch('/api/notify-admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: userName,
+            phone: userPhone,
+            pickup,
+            dropoff,
+            time,
+            tripType
+          })
+        });
+      } catch (err) {
+        console.log('Background notify error:', err);
+      }
     }
     setLoading(false);
   };
 
-  // യാത്ര റദ്ദാക്കൽ (Cancel Ride)
-  const handleCancelRide = async () => {
-    if (!activeRide) return;
-    const confirmCancel = window.confirm('ഈ ബുക്കിംഗ് റദ്ദാക്കണമെന്ന് ഉറപ്പാണോ?');
-    if (!confirmCancel) return;
-
-    const { error } = await supabase
-      .from('rides')
-      .update({ status: 'canceled' })
-      .eq('id', activeRide.id);
-
-    if (error) {
-      alert('റദ്ദാക്കുന്നതിൽ തടസ്സം: ' + error.message);
-    } else {
-      alert('ബുക്കിംഗ് റദ്ദാക്കി.');
-      setActiveRide(null);
-      setDriverInfo(null);
-    }
-  };
-
   return (
-    <div style={{ minHeight: '100vh', background: '#F7FAF9', color: '#16283A', fontFamily: 'sans-serif', padding: '24px 16px' }}>
-      <div style={{ maxWidth: '520px', margin: '0 auto' }}>
-        
-        {/* Navigation Bar */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-          <Link href="/" style={{ textDecoration: 'none', color: '#1467B8', fontWeight: 800, fontSize: '1.2rem' }}>
-            &larr; Easy Drive Home
-          </Link>
-          {user && (
-            <span style={{ fontSize: '0.85rem', color: '#51647A' }}>
-              {user.user_metadata?.full_name || user.email}
-            </span>
-          )}
+    <div style={{ minHeight: '100vh', background: '#F8FAFC', color: '#0F172A', fontFamily: 'sans-serif' }}>
+      
+      {/* Top Navbar */}
+      <nav style={{ background: '#fff', borderBottom: '1px solid #E2E8F0', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontWeight: 900, fontSize: '1.2rem', color: '#1467B8' }}>easy<span style={{ color: '#179469' }}>drive</span> Rider</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <span style={{ fontSize: '0.9rem', color: '#64748B' }}>👤 {userName} ({userPhone})</span>
+          <button onClick={() => { localStorage.clear(); router.push('/rider/login'); }} style={{ padding: '6px 12px', background: '#FEE2E2', color: '#DC2626', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.8rem' }}>
+            Logout
+          </button>
         </div>
+      </nav>
 
-        {/* ഗൂഗിൾ ലോഗിൻ ചെയ്യാത്ത അവസ്ഥ */}
-        {!user ? (
-          <div style={{ background: '#fff', padding: '32px 24px', borderRadius: '20px', border: '1px solid #DCE6E8', textAlign: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
-            <h2 style={{ color: '#1467B8', marginTop: 0 }}>യാത്രക്കാരൻ ലോഗിൻ</h2>
-            <p style={{ color: '#51647A', fontSize: '0.95rem', marginBottom: '24px' }}>
-              നിങ്ങളുടെ കാറിനായി ഡ്രൈവറെ വിളിക്കാനും തത്സമയ സ്റ്റാറ്റസ് കാണാനും ഗൂഗിൾ ഉപയോഗിച്ച് പ്രവേശിക്കുക.
-            </p>
-            <button onClick={handleGoogleLogin} style={{ padding: '12px 24px', background: '#1467B8', color: '#fff', border: 'none', borderRadius: '999px', fontWeight: 800, cursor: 'pointer', fontSize: '1rem' }}>
-              Continue with Google
-            </button>
-          </div>
-        ) : activeRide ? (
-          /* സജീവ യാത്രയുടെ തത്സമയ സ്റ്റാറ്റസ് കാർഡ് (Active Ride Card) */
-          <div style={{ background: '#fff', borderRadius: '24px', border: activeRide.status === 'accepted' ? '2px solid #2FC18E' : '2px solid #f59e0b', padding: '28px', boxShadow: '0 8px 24px rgba(0,0,0,0.05)' }}>
-            
-            {/* Status Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <span style={{
-                padding: '6px 14px',
-                borderRadius: '999px',
-                fontSize: '0.85rem',
-                fontWeight: 900,
-                color: '#fff',
-                background: activeRide.status === 'accepted' ? '#179469' : '#d97706'
-              }}>
-                {activeRide.status === 'accepted' ? '🟢 ഡ്രൈവർ വരുന്നു (DRIVER EN-ROUTE)' : '🟡 ഡ്രൈവർക്കായി തിരയുന്നു...'}
-              </span>
-              <span style={{ fontSize: '0.85rem', color: '#51647A' }}>{activeRide.trip_type}</span>
-            </div>
+      <main style={{ maxWidth: '800px', margin: '32px auto', padding: '0 20px', display: 'flex', flexDirection: 'column', gap: '32px' }}>
+        
+        {/* New Booking Section */}
+        <section style={{ background: '#fff', padding: '28px', borderRadius: '20px', border: '1px solid #E2E8F0', boxShadow: '0 4px 15px rgba(0,0,0,0.03)' }}>
+          <h2 style={{ margin: '0 0 6px', fontSize: '1.3rem', color: '#1467B8' }}>പുതിയ യാത്ര ബുക്ക് ചെയ്യുക</h2>
+          <p style={{ margin: '0 0 20px', fontSize: '0.85rem', color: '#64748B' }}>സ്ഥലവും സമയവും തിരഞ്ഞെടുക്കുക</p>
 
-            {/* ഡ്രൈവർ വിവരങ്ങൾ */}
-            {activeRide.status === 'accepted' && driverInfo ? (
-              <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '16px', padding: '16px', marginBottom: '20px' }}>
-                <h3 style={{ margin: '0 0 6px', color: '#166534', fontSize: '1.15rem' }}>
-                  🚕 ഡ്രൈവർ വിവരങ്ങൾ
-                </h3>
-                <p style={{ margin: '2px 0', fontSize: '0.95rem' }}>പേര്: <strong>{driverInfo.full_name}</strong></p>
-                <p style={{ margin: '2px 0', fontSize: '0.95rem' }}>ഫോൺ: <strong>{driverInfo.phone}</strong></p>
-                <p style={{ margin: '2px 0', fontSize: '0.85rem', color: '#51647A' }}>പരിചയം: {driverInfo.vehicle_details}</p>
-                <a href={`tel:${driverInfo.phone}`} style={{ display: 'inline-block', marginTop: '10px', padding: '8px 16px', background: '#179469', color: '#fff', borderRadius: '8px', textDecoration: 'none', fontWeight: 800, fontSize: '0.85rem' }}>
-                  📞 ഡ്രൈവറെ വിളിക്കുക
-                </a>
-              </div>
-            ) : (
-              <div style={{ padding: '16px', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '14px', marginBottom: '20px', textAlign: 'center' }}>
-                <p style={{ margin: 0, color: '#92400E', fontSize: '0.9rem', fontWeight: 700 }}>
-                  അടുത്തുള്ള വെരിഫൈഡ് ഡ്രൈവർമാർക്ക് നോട്ടിഫിക്കേഷൻ അയച്ചിട്ടുണ്ട്. ഒരാൾ അക്സെപ്റ്റ് ചെയ്യുമ്പോൾ വിവരങ്ങൾ ഇവിടെ കാണാം.
-                </p>
-              </div>
-            )}
-
-            {/* റൂട്ട് വിവരങ്ങൾ */}
-            <div style={{ borderTop: '1px solid #DCE6E8', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div>
-                <span style={{ fontSize: '0.8rem', color: '#51647A' }}>പിക്കപ്പ് ലൊക്കേഷൻ</span>
-                <p style={{ margin: 0, fontWeight: 700 }}>{activeRide.pickup_location}</p>
-              </div>
-              <div>
-                <span style={{ fontSize: '0.8rem', color: '#51647A' }}>ഡ്രോപ്പ് ലൊക്കേഷൻ</span>
-                <p style={{ margin: 0, fontWeight: 700 }}>{activeRide.dropoff_location}</p>
-              </div>
-            </div>
-
-            {/* Cancel Button */}
-            <button
-              onClick={handleCancelRide}
-              style={{ marginTop: '24px', width: '100%', padding: '12px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 800, cursor: 'pointer' }}
-            >
-              ഈ യാത്ര റദ്ദാക്കുക (Cancel Ride)
-            </button>
-          </div>
-        ) : (
-          /* പുതിയ റൈഡ് ബുക്ക് ചെയ്യാനുള്ള ഫോം (Ride Booking Form) */
-          <form onSubmit={handleRequestRide} style={{ background: '#fff', padding: '28px', borderRadius: '24px', border: '1px solid #DCE6E8', display: 'flex', flexDirection: 'column', gap: '14px', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
-            <h2 style={{ color: '#1467B8', margin: '0 0 4px' }}>പുതിയ യാത്ര ബുക്ക് ചെയ്യുക</h2>
-            <p style={{ color: '#51647A', fontSize: '0.9rem', margin: '0 0 12px' }}>യാത്രയുടെ വിവരങ്ങൾ കൃത്യമായി രേഖപ്പെടുത്തുക</p>
-
-            {errorMsg && (
-              <div style={{ padding: '10px', background: '#FEE2E2', border: '1px solid #FCA5A5', color: '#991B1B', borderRadius: '8px', fontSize: '0.85rem' }}>
-                {errorMsg}
-              </div>
-            )}
-
+          <form onSubmit={handleBooking} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
             <div>
-              <label style={{ fontSize: '0.85rem', fontWeight: 700, display: 'block', marginBottom: '4px' }}>പിക്കപ്പ് സ്ഥലം (Pickup)</label>
-              <input required placeholder="ഉദാ: ഇടപ്പള്ളി മെട്രോ സ്റ്റേഷൻ" value={pickup} onChange={e => setPickup(e.target.value)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #DCE6E8', boxSizing: 'border-box' }} />
+              <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>പിക്കപ്പ് സ്ഥലം</label>
+              <input required placeholder="ഉദാ: Aluva" value={pickup} onChange={e => setPickup(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #CBD5E1', boxSizing: 'border-box' }} />
             </div>
 
             <div>
-              <label style={{ fontSize: '0.85rem', fontWeight: 700, display: 'block', marginBottom: '4px' }}>ഡ്രോപ്പ് സ്ഥലം (Destination)</label>
-              <input required placeholder="ഉദാ: ഇൻഫോപാർക്ക് ഫേസ് 1, കാക്കനാട്" value={dropoff} onChange={e => setDropoff(e.target.value)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #DCE6E8', boxSizing: 'border-box' }} />
+              <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>ഡ്രോപ്പ് സ്ഥലം</label>
+              <input required placeholder="ഉദാ: Kakkanad" value={dropoff} onChange={e => setDropoff(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #CBD5E1', boxSizing: 'border-box' }} />
             </div>
 
             <div>
-              <label style={{ fontSize: '0.85rem', fontWeight: 700, display: 'block', marginBottom: '4px' }}>മൊബൈൽ നമ്പർ</label>
-              <input required type="tel" maxLength={10} placeholder="9876543210" value={phone} onChange={e => setPhone(e.target.value)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #DCE6E8', boxSizing: 'border-box' }} />
-            </div>
-
-            <div>
-              <label style={{ fontSize: '0.85rem', fontWeight: 700, display: 'block', marginBottom: '4px' }}>യാത്രാ വിഭാഗം</label>
-              <select value={tripType} onChange={e => setTripType(e.target.value)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #DCE6E8', boxSizing: 'border-box' }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>വിഭാഗം</label>
+              <select value={tripType} onChange={e => setTripType(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #CBD5E1', boxSizing: 'border-box', background: '#fff' }}>
                 <option>Daily commute</option>
                 <option>Night travel</option>
                 <option>Outstation trip</option>
               </select>
             </div>
 
-            <button type="submit" disabled={loading} style={{ padding: '14px', background: 'linear-gradient(90deg,#1467B8,#179469)', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 900, cursor: 'pointer', marginTop: '8px', fontSize: '1rem' }}>
-              {loading ? 'ഡ്രൈവറെ റിക്വസ്റ്റ് ചെയ്യുന്നു...' : 'ഡ്രൈവറെ റിക്വസ്റ്റ് ചെയ്യുക'}
+            <div>
+              <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>സമയം</label>
+              <input required type="datetime-local" min={currentDateTime} value={time} onChange={e => setTime(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #CBD5E1', boxSizing: 'border-box' }} />
+            </div>
+
+            <button type="submit" disabled={loading} style={{ gridColumn: '1 / -1', padding: '13px', background: 'linear-gradient(90deg, #1467B8, #179469)', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 800, cursor: 'pointer', marginTop: '6px' }}>
+              {loading ? 'ബുക്കിംഗ് രേഖപ്പെടുത്തുന്നു...' : 'ഡ്രൈവറെ റിക്വസ്റ്റ് ചെയ്യുക'}
             </button>
           </form>
-        )}
 
-      </div>
+          {statusMsg && (
+            <div style={{ marginTop: '16px', padding: '12px', background: '#F0FDF4', color: '#166534', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700 }}>
+              {statusMsg}
+            </div>
+          )}
+        </section>
+
+        {/* Live Status Tracking Section */}
+        <section style={{ background: '#fff', padding: '28px', borderRadius: '20px', border: '1px solid #E2E8F0' }}>
+          <h2 style={{ margin: '0 0 16px', fontSize: '1.25rem', color: '#0F172A' }}>നിങ്ങളുടെ യാത്രകൾ & തത്സമയ സ്റ്റാറ്റസ്</h2>
+          
+          {rides.length === 0 ? (
+            <p style={{ color: '#94A3B8', fontSize: '0.9rem' }}>ഇതുവരെ യാത്രകളൊന്നും ബുക്ക് ചെയ്തിട്ടില്ല.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {rides.map(r => (
+                <div key={r.id} style={{ padding: '16px', border: '1px solid #E2E8F0', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1E293B' }}>
+                      📍 {r.pickup_location} ➔ 🏁 {r.dropoff_location}
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '4px' }}>
+                      🕒 {new Date(r.scheduled_time).toLocaleString('en-IN')} | {r.trip_type}
+                    </div>
+                  </div>
+
+                  {/* ലൈവ് സ്റ്റാറ്റസ് ബാഡ്ജ് */}
+                  <div>
+                    {r.status === 'pending' || r.status === 'requested' ? (
+                      <span style={{ padding: '6px 12px', background: '#FEF3C7', color: '#B45309', borderRadius: '999px', fontSize: '0.8rem', fontWeight: 800 }}>
+                        ⏳ Pending Driver Allocation
+                      </span>
+                    ) : r.status === 'accepted' ? (
+                      <span style={{ padding: '6px 12px', background: '#DCFCE7', color: '#15803D', borderRadius: '999px', fontSize: '0.8rem', fontWeight: 800 }}>
+                        ✅ Driver Confirmed
+                      </span>
+                    ) : (
+                      <span style={{ padding: '6px 12px', background: '#F1F5F9', color: '#475569', borderRadius: '999px', fontSize: '0.8rem', fontWeight: 800 }}>
+                        🏁 {r.status}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+      </main>
     </div>
   );
 }
